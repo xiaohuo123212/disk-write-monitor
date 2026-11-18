@@ -315,6 +315,15 @@ if (Test-Path -LiteralPath $currentFile) {
     Remove-Item -LiteralPath $currentFile -Force -ErrorAction SilentlyContinue
 }
 
+# 自身完整性级别: 低完整性(<0x2000)只能看到很少进程, 用于提示用户
+$script:integrity = 0x2000
+try {
+    $who = & whoami.exe /groups 2>$null
+    foreach ($wline in $who) {
+        if ($wline -match 'S-1-16-(\d+)') { $script:integrity = [int]$Matches[1]; break }
+    }
+} catch { }
+
 Write-Log "环境 TEMP=$env:TEMP TMP=$env:TMP"; Write-Log ("引擎启动 v3 PID={0} 粒度={1}s 频率={2}s 已加载 {3} 个桶" -f $PID, $script:granularitySec, $script:flushSecV, $bucketIndex.Count)
 
 # ---------------- 采样 ----------------
@@ -419,6 +428,33 @@ public static class ProcessIo
         totalPage = ms.ullTotalPageFile; availPage = ms.ullAvailPageFile;
         load = ms.dwMemoryLoad;
         return true;
+    }
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool OpenProcessToken(IntPtr h, uint access, out IntPtr token);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool GetTokenInformation(IntPtr token, int cls, IntPtr buf, int len, out int ret);
+
+    // 自身完整性级别: 0x1000=低, 0x2000=中, 0x3000=高。低完整性看不到别的进程
+    public static int GetSelfIntegrity()
+    {
+        IntPtr token = IntPtr.Zero;
+        if (!OpenProcessToken(System.Diagnostics.Process.GetCurrentProcess().Handle, 0x0008, out token)) return 0;
+        IntPtr buf = IntPtr.Zero;
+        try
+        {
+            buf = Marshal.AllocHGlobal(64);
+            int ret = 0;
+            if (!GetTokenInformation(token, 25, buf, 64, out ret)) return 0;
+            IntPtr sidPtr = Marshal.ReadIntPtr(buf);
+            byte[] sid = new byte[32];
+            Marshal.Copy(sidPtr, sid, 0, 8);
+            int subCount = sid[1];
+            if (subCount < 1) return 0;
+            return sid[8 + 4 * (subCount - 1)] | (sid[9 + 4 * (subCount - 1)] << 8) | (sid[10 + 4 * (subCount - 1)] << 16) | (sid[11 + 4 * (subCount - 1)] << 24);
+        }
+        finally { if (buf != IntPtr.Zero) Marshal.FreeHGlobal(buf); CloseHandle(token); }
     }
 }
 '@
@@ -775,6 +811,7 @@ try {
                 pageCapacity = [long]$pageCap
                 commitUsed   = [long]$commitUsed
                 commitLimit  = [long]$tpf
+                integrity   = [int]$script:integrity
             }
 
             $state = [pscustomobject]@{
