@@ -1,0 +1,39 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 编译
+        shell: pwsh
+        run: ./build.ps1
+
+      - name: 校验产物
+        shell: pwsh
+        run: |
+          $f = Get-Item DiskWriteMonitor.exe
+          "产物: {0} ({1:N1} KB), 版本 {2}" -f $f.Name, ($f.Length/1KB), $f.VersionInfo.FileVersion
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DiskWriteMonitor
+          path: DiskWriteMonitor.exe
+          if-no-files-found: error
+
+      - name: 打 tag 时附到 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: DiskWriteMonitor.exe
+          generate_release_notes: true
