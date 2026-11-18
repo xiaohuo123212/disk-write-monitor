@@ -551,6 +551,9 @@ function Update-View {
                     (Format-Size ([double]$st.sysmem.usedPhys)), (Format-Size ([double]$st.sysmem.totalPhys)),
                     (Format-Size ([double]$st.sysmem.commitUsed))
             }
+            if ($st.sysmem -and [int]$st.sysmem.integrity -gt 0 -and [int]$st.sysmem.integrity -lt 0x2000) {
+                $memTxt += ' ⚠低完整性启动，只能看到 ' + $st.processCount + ' 个进程（请从资源管理器双击 exe 启动）'
+            }
             $script:lblStatus.Text = ("引擎运行中 · {0} 个进程 · 会话 {1}{2}" -f $st.processCount, (Format-Span ([double]$st.uptimeSec)), $memTxt)
             $script:lblStatus.Foreground = $accent
         } else {
