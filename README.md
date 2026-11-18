@@ -1,4 +1,4 @@
-# 磁盘读写监视器 · DiskWriteMonitor
+﻿# 磁盘读写监视器 · DiskWriteMonitor
 
 一个 100 KB 出头的 Windows 小工具：**按软件统计磁盘读写量，能回看任何时间点，数据量每天只有几十 KB。**
 
@@ -15,6 +15,13 @@ C:\BootTrace\...WPR_System_Collector.etl.002    58.11 GB   11:40 → 14:28
 
 事后只能靠文件时间戳倒推。有了历史记录，直接就能回答“昨天下午谁在写盘”。
 
+## 界面
+
+![主界面](screenshots/main.png)
+
+近 1 天视图（趋势图自动切成按小时的柱状，左侧刻度变成 GB）：
+
+![近 1 天](screenshots/day.png)
 ## 功能
 
 | 能力 | 说明 |
@@ -147,6 +154,10 @@ csc /target:winexe /optimize+ /out:DiskWriteMonitor.exe /win32icon:src\app.ico `
 - 托盘图标在部分系统上会被收进「^」溢出区，本工具不依赖托盘：关窗口是最小化到任务栏
 - 采样下限约 0.4 秒，瓶颈是每次枚举几百个进程并逐个 `OpenProcess`
 - 只支持 Windows
+
+## 持续集成
+
+`.github/workflows/build.yml` 会在每次 push 到 main 时用 `windows-latest` 的 `csc.exe` 编译并上传产物；打 `v*` tag 时自动附到 Release。
 
 ## 许可
 
