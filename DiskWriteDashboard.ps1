@@ -369,7 +369,7 @@ $sep2 = New-Object System.Windows.Controls.Border
 $sep2.Height = 1; $sep2.Background = Brush '#33333D'; $sep2.Margin = '0,8,0,0'
 $leftStack.Children.Add($sep2) | Out-Null
 
-New-SectionHeader '● 内存排行' $accent2
+New-SectionHeader '● 内存排行（专用工作集）' $accent2
 $script:rowsM = New-RowSet 4
 $right = New-Object System.Windows.Controls.Grid
 [System.Windows.Controls.Grid]::SetColumn($right, 1) | Out-Null
@@ -640,17 +640,19 @@ function Update-View {
         $mItems = @()
         if ($st.memory) { $mItems = @($st.memory | Select-Object -First $script:rowsM.Count) }
         $maxM = 1.0
-        foreach ($it in $mItems) { if ([double]$it.ws -gt $maxM) { $maxM = [double]$it.ws } }
+        foreach ($it in $mItems) { $v = [double]$it.pws; if ($v -le 0) { $v = [double]$it.ws }; if ($v -gt $maxM) { $maxM = $v } }
         for ($i = 0; $i -lt $script:rowsM.Count; $i++) {
             $row = $script:rowsM[$i]
             if ($i -lt $mItems.Count) {
                 $it = $mItems[$i]
                 $row.Name.Text = $it.name
                 try { $row.Icon.Source = Get-ProgramIcon ([string]$it.path) } catch { }
-                $ratio = [double]$it.ws / $maxM
-                if ($ratio -lt 0.02 -and [double]$it.ws -gt 0) { $ratio = 0.02 }
+                $memVal = [double]$it.pws
+                if ($memVal -le 0) { $memVal = [double]$it.ws }
+                $ratio = $memVal / $maxM
+                if ($ratio -lt 0.02 -and $memVal -gt 0) { $ratio = 0.02 }
                 $row.Fill.Width = [math]::Max(0, $trackW * $ratio)
-                $row.Nums.Text = ('{0} · 页 {1}' -f (Format-Size ([double]$it.ws)), (Format-Size ([double]$it.pf)))
+                $row.Nums.Text = ('{0} · 提交 {1}' -f (Format-Size $memVal), (Format-Size ([double]$it.pf)))
             } else {
                 $row.Name.Text = ''; $row.Nums.Text = ''; $row.Fill.Width = 0; $row.Icon.Source = $null
             }
