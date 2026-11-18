@@ -474,6 +474,87 @@ public static class ProcessIo
         finally { if (buf != IntPtr.Zero) Marshal.FreeHGlobal(buf); CloseHandle(token); }
     }
 }
+
+// 专用工作集(任务管理器「内存」列口径): 走 PDH 性能计数器, 一次约 2ms
+public static class PrivateMem
+{
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PDH_FMT_COUNTERVALUE { public uint CStatus; public double doubleValue; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PDH_FMT_COUNTERVALUE_ITEM { public IntPtr szName; public PDH_FMT_COUNTERVALUE FmtValue; }
+
+    [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+    static extern uint PdhOpenQuery(string szDataSource, IntPtr dwUserData, out IntPtr phQuery);
+
+    [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+    static extern uint PdhAddCounter(IntPtr hQuery, string szFullCounterPath, IntPtr dwUserData, out IntPtr phCounter);
+
+    [DllImport("pdh.dll")]
+    static extern uint PdhCollectQueryData(IntPtr hQuery);
+
+    [DllImport("pdh.dll")]
+    static extern uint PdhCloseQuery(IntPtr hQuery);
+
+    [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+    static extern uint PdhGetFormattedCounterArray(IntPtr hCounter, uint dwFormat, ref uint lpdwBufferSize, out uint lpdwItemCount, IntPtr ItemBuffer);
+
+    const uint PDH_FMT_DOUBLE = 0x00000200;
+    const uint PDH_MORE_DATA = 0x800007D2;
+
+    static IntPtr query = IntPtr.Zero;
+    static IntPtr counter = IntPtr.Zero;
+
+    static void EnsureOpen()
+    {
+        if (query != IntPtr.Zero) return;
+        uint rc = PdhOpenQuery(null, IntPtr.Zero, out query);
+        if (rc != 0) { query = IntPtr.Zero; return; }
+        rc = PdhAddCounter(query, "\\Process(*)\\Working Set - Private", IntPtr.Zero, out counter);
+        if (rc != 0) { PdhCloseQuery(query); query = IntPtr.Zero; counter = IntPtr.Zero; return; }
+        PdhCollectQueryData(query);
+    }
+
+    public static System.Collections.Generic.Dictionary<string, double> Read()
+    {
+        var result = new System.Collections.Generic.Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        EnsureOpen();
+        if (query == IntPtr.Zero) return result;
+        if (PdhCollectQueryData(query) != 0) return result;
+
+        uint size = 0; uint count = 0;
+        uint rc = PdhGetFormattedCounterArray(counter, PDH_FMT_DOUBLE, ref size, out count, IntPtr.Zero);
+        if (rc != PDH_MORE_DATA && rc != 0) return result;
+        if (size == 0) return result;
+
+        IntPtr buf = Marshal.AllocHGlobal((int)size);
+        try
+        {
+            rc = PdhGetFormattedCounterArray(counter, PDH_FMT_DOUBLE, ref size, out count, buf);
+            if (rc != 0) return result;
+            int itemSize = Marshal.SizeOf(typeof(PDH_FMT_COUNTERVALUE_ITEM));
+            for (int i = 0; i < count; i++)
+            {
+                IntPtr p = new IntPtr(buf.ToInt64() + (long)i * itemSize);
+                PDH_FMT_COUNTERVALUE_ITEM item = (PDH_FMT_COUNTERVALUE_ITEM)Marshal.PtrToStructure(p, typeof(PDH_FMT_COUNTERVALUE_ITEM));
+                if (item.szName == IntPtr.Zero) continue;
+                string name = Marshal.PtrToStringUni(item.szName);
+                if (string.IsNullOrEmpty(name)) continue;
+                if (name.Equals("_Total", StringComparison.OrdinalIgnoreCase)) continue;
+                if (name.Equals("Idle", StringComparison.OrdinalIgnoreCase)) continue;
+                int hash = name.IndexOf('#');
+                if (hash > 0) name = name.Substring(0, hash);
+                double v = item.FmtValue.doubleValue;
+                if (v <= 0) continue;
+                double old;
+                if (result.TryGetValue(name, out old)) result[name] = old + v;
+                else result[name] = v;
+            }
+        }
+        finally { Marshal.FreeHGlobal(buf); }
+        return result;
+    }
+}
 '@
 if (-not ('ProcessIo' -as [type])) { Add-Type -TypeDefinition $src -Language CSharp }
 
@@ -705,6 +786,9 @@ try {
         foreach ($r in $rows) { $alive[$r.Key] = $true }
         foreach ($k in @($seen.Keys)) { if (-not $alive.ContainsKey($k)) { $seen.Remove($k) } }
 
+        # 专用工作集: 任务管理器口径, 一次约 2ms
+        try { $script:privateWs = [PrivateMem]::Read() } catch { $script:privateWs = @{} }
+
         # 内存按程序聚合(同一软件多个进程相加)
         $memNow = @{}
         foreach ($r in $rows) {
@@ -816,12 +900,21 @@ try {
             }
 
             $memList = New-Object System.Collections.Generic.List[object]
-            foreach ($k in $memNow.Keys) {
+            $seenNames = @{}
+            foreach ($k in @($script:privateWs.Keys)) { $seenNames[$k] = $true }
+            foreach ($k in $memNow.Keys) { $seenNames[$k] = $true }
+            foreach ($k in $seenNames.Keys) {
                 $mpath = ''
                 if ($procPaths.ContainsKey($k)) { $mpath = $procPaths[$k] }
-                $memList.Add([pscustomobject]@{ name = $k; ws = [long]$memNow[$k].ws; pf = [long]$memNow[$k].pf; path = $mpath })
+                $pws = 0L
+                if ($script:privateWs.ContainsKey($k)) { $pws = [long]$script:privateWs[$k] }
+                $totWs = 0L; $pfv = 0L
+                if ($memNow.ContainsKey($k)) { $totWs = [long]$memNow[$k].ws; $pfv = [long]$memNow[$k].pf }
+                if ($pws -le 0) { $pws = $totWs }
+                if ($pws -le 0) { continue }
+                $memList.Add([pscustomobject]@{ name = $k; pws = $pws; ws = $totWs; pf = $pfv; path = $mpath })
             }
-            $memTop = @($memList | Sort-Object ws -Descending | Select-Object -First 12)
+            $memTop = @($memList | Sort-Object pws -Descending | Select-Object -First 12)
 
             $tp = [uint64]0; $ap = [uint64]0; $tpf = [uint64]0; $apf = [uint64]0; $load = 0
             [void][ProcessIo]::TryGetSystem([ref]$tp, [ref]$ap, [ref]$tpf, [ref]$apf, [ref]$load)
