@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 <#
   一键构建 DiskWriteMonitor.exe
   依赖: Windows 自带的 .NET Framework 编译器 csc.exe (无需 Visual Studio)
