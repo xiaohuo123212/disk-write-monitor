@@ -301,9 +301,9 @@ function New-RowSet([int]$count) {
     for ($i = 0; $i -lt $count; $i++) {
         $rowGrid = New-Object System.Windows.Controls.Grid
         $rowGrid.Margin = '0,1,0,1'
-        $cA = New-Object System.Windows.Controls.ColumnDefinition; $cA.Width = '150'
+        $cA = New-Object System.Windows.Controls.ColumnDefinition; $cA.Width = '132'
         $cB = New-Object System.Windows.Controls.ColumnDefinition; $cB.Width = New-Object System.Windows.GridLength(1, 'Star')
-        $cC = New-Object System.Windows.Controls.ColumnDefinition; $cC.Width = '92'
+        $cC = New-Object System.Windows.Controls.ColumnDefinition; $cC.Width = '126'
         $rowGrid.ColumnDefinitions.Add($cA) | Out-Null
         $rowGrid.ColumnDefinitions.Add($cB) | Out-Null
         $rowGrid.ColumnDefinitions.Add($cC) | Out-Null
@@ -378,21 +378,45 @@ $r1 = New-Object System.Windows.Controls.RowDefinition; $r1.Height = New-Object 
 $r2 = New-Object System.Windows.Controls.RowDefinition; $r2.Height = 'Auto'
 $right.RowDefinitions.Add($r1) | Out-Null; $right.RowDefinitions.Add($r2) | Out-Null
 
+$chartRow = New-Object System.Windows.Controls.Grid
+[System.Windows.Controls.Grid]::SetRow($chartRow, 0) | Out-Null
+$right.Children.Add($chartRow) | Out-Null
+$cr1 = New-Object System.Windows.Controls.RowDefinition; $cr1.Height = New-Object System.Windows.GridLength(1, 'Star')
+$cr2 = New-Object System.Windows.Controls.RowDefinition; $cr2.Height = New-Object System.Windows.GridLength(1, 'Star')
+$chartRow.RowDefinitions.Add($cr1) | Out-Null
+$chartRow.RowDefinitions.Add($cr2) | Out-Null
+
+# 上: 写入速率
 $chartBorder = New-Object System.Windows.Controls.Border
 $chartBorder.Background = $panel; $chartBorder.CornerRadius = '6'
-$chartBorder.Padding = '12,10'; $chartBorder.Margin = '0,0,0,10'
+$chartBorder.Padding = '10,8'; $chartBorder.Margin = '0,0,0,5'
 [System.Windows.Controls.Grid]::SetRow($chartBorder, 0) | Out-Null
-$right.Children.Add($chartBorder) | Out-Null
-
+$chartRow.Children.Add($chartBorder) | Out-Null
 $chartStack = New-Object System.Windows.Controls.StackPanel
 $chartBorder.Child = $chartStack
 $script:lblChart = New-Object System.Windows.Controls.TextBlock
-$script:lblChart.Text = '写入趋势'; $script:lblChart.Foreground = $muted
-$script:lblChart.FontSize = 12; $script:lblChart.Margin = '0,0,0,6'
+$script:lblChart.Text = '写入速率'; $script:lblChart.Foreground = $muted
+$script:lblChart.FontSize = 12; $script:lblChart.Margin = '0,0,0,4'
 $chartStack.Children.Add($script:lblChart) | Out-Null
 $script:chart = New-Object System.Windows.Controls.Canvas
-$script:chart.Height = 190; $script:chart.ClipToBounds = $true
+$script:chart.Height = 150; $script:chart.ClipToBounds = $true
 $chartStack.Children.Add($script:chart) | Out-Null
+
+# 下: 读取速率
+$chartBorderR = New-Object System.Windows.Controls.Border
+$chartBorderR.Background = $panel; $chartBorderR.CornerRadius = '6'
+$chartBorderR.Padding = '10,8'; $chartBorderR.Margin = '0,0,0,0'
+[System.Windows.Controls.Grid]::SetRow($chartBorderR, 1) | Out-Null
+$chartRow.Children.Add($chartBorderR) | Out-Null
+$chartStackR = New-Object System.Windows.Controls.StackPanel
+$chartBorderR.Child = $chartStackR
+$script:lblChartR = New-Object System.Windows.Controls.TextBlock
+$script:lblChartR.Text = '读取速率'; $script:lblChartR.Foreground = $muted
+$script:lblChartR.FontSize = 12; $script:lblChartR.Margin = '0,0,0,4'
+$chartStackR.Children.Add($script:lblChartR) | Out-Null
+$script:chartR = New-Object System.Windows.Controls.Canvas
+$script:chartR.Height = 150; $script:chartR.ClipToBounds = $true
+$chartStackR.Children.Add($script:chartR) | Out-Null
 
 $cumBorder = New-Object System.Windows.Controls.Border
 $cumBorder.Background = $panel; $cumBorder.CornerRadius = '6'; $cumBorder.Padding = '12,10'
@@ -538,6 +562,7 @@ function Update-View {
             foreach ($r in $script:rows) { $r.Name.Text = ''; $r.Nums.Text = ''; $r.Fill.Width = 0 }
             foreach ($t in $script:cumLabels) { $t.Text = '' }
             $script:chart.Children.Clear()
+            if ($script:chartR) { $script:chartR.Children.Clear() }
             return
         }
 
@@ -639,18 +664,27 @@ function Update-View {
             } else { $script:cumLabels[$i].Text = '' }
         }
 
+        # 写入速率/量
+        # 写入速率/量
         switch ($meta.series) {
-            'rate'   { $script:lblChart.Text = '总写入速率 · 最近 3 分钟（MB/s）'; Draw-Series -Points @($st.history) -ValueProp 'rate' -LabelProp 'ts' -IsRate }
-            'hourly' { $script:lblChart.Text = '每小时写入量 · 最近 24 小时'; Draw-Series -Points @($st.hourly24) -ValueProp 'bytes' -LabelProp 'label' }
-            'daily'  { $script:lblChart.Text = '每天写入量 · 最近 30 天'; Draw-Series -Points @($st.daily30) -ValueProp 'bytes' -LabelProp 'label' }
+            'rate'   { $script:lblChart.Text = '写入速率 · 最近 3 分钟'; Draw-Series -Points @($st.history) -ValueProp 'rate' -LabelProp 'ts' -IsRate -Target $script:chart }
+            'hourly' { $script:lblChart.Text = '每小时写入量 · 24 小时'; Draw-Series -Points @($st.hourly24) -ValueProp 'bytes' -LabelProp 'label' -Target $script:chart }
+            'daily'  { $script:lblChart.Text = '每天写入量 · 30 天'; Draw-Series -Points @($st.daily30) -ValueProp 'bytes' -LabelProp 'label' -Target $script:chart }
+        }
+        # 读取速率/量
+        switch ($meta.series) {
+            'rate'   { $script:lblChartR.Text = '读取速率 · 最近 3 分钟'; Draw-Series -Points @($st.history) -ValueProp 'rrate' -LabelProp 'ts' -IsRate -Target $script:chartR -Color $accent2 }
+            'hourly' { $script:lblChartR.Text = '每小时读取量 · 24 小时'; Draw-Series -Points @($st.hourly24) -ValueProp 'rbytes' -LabelProp 'label' -Target $script:chartR -Color $accent2 }
+            'daily'  { $script:lblChartR.Text = '每天读取量 · 30 天'; Draw-Series -Points @($st.daily30) -ValueProp 'rbytes' -LabelProp 'label' -Target $script:chartR -Color $accent2 }
         }
     } catch {
         Add-Message ('刷新失败: ' + $_.Exception.Message) 'error'
     }
 }
 
-function Draw-Series($Points, [string]$ValueProp, [string]$LabelProp, [switch]$IsRate) {
-    $cv = $script:chart
+function Draw-Series($Points, [string]$ValueProp, [string]$LabelProp, [switch]$IsRate, $Target, $Color) {
+    if (-not $Color) { $Color = $accent }
+    $cv = if ($Target) { $Target } else { $script:chart }
     $w = $cv.ActualWidth; $h = $cv.ActualHeight
     if ($w -le 10 -or $h -le 10) { return }
     $cv.Children.Clear()
@@ -701,7 +735,7 @@ function Draw-Series($Points, [string]$ValueProp, [string]$LabelProp, [switch]$I
 
     if ($IsRate) {
         $poly = New-Object System.Windows.Shapes.Polyline
-        $poly.Stroke = $accent; $poly.StrokeThickness = 1.8; $poly.StrokeLineJoin = 'Round'
+        $poly.Stroke = $Color; $poly.StrokeThickness = 1.8; $poly.StrokeLineJoin = 'Round'
         for ($i = 0; $i -lt $n; $i++) {
             $poly.Points.Add((New-Object System.Windows.Point((& $ptX $i), (& $ptY $vals[$i]))))
         }
@@ -713,7 +747,7 @@ function Draw-Series($Points, [string]$ValueProp, [string]$LabelProp, [switch]$I
             if ($bh -lt 0.5 -and $vals[$i] -gt 0) { $bh = 0.5 }
             $rect = New-Object System.Windows.Shapes.Rectangle
             $rect.Width = $bw; $rect.Height = $bh
-            $rect.Fill = if ($vals[$i] -ge $maxVal * 0.75) { $accent } else { Brush '#3E6B63' }
+            $rect.Fill = if ($vals[$i] -ge $maxVal * 0.75) { $Color } else { Brush '#3E6B63' }
             [System.Windows.Controls.Canvas]::SetLeft($rect, ((& $ptX $i) - $bw / 2)) | Out-Null
             [System.Windows.Controls.Canvas]::SetTop($rect, ($padT + $plotH - $bh)) | Out-Null
             $cv.Children.Add($rect) | Out-Null
