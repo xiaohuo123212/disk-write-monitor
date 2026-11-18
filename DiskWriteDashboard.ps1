@@ -9,6 +9,7 @@ param(
     [int]$RefreshMs = 400,
     [switch]$SelfTest,
     [string]$Snapshot = '',
+    [string]$Window = '',
     [switch]$NoTray,
     [switch]$StartHidden
 )
@@ -355,14 +356,21 @@ function New-SectionHeader([string]$text, $color) {
 }
 
 New-SectionHeader '▲ 写入排行' $accent
-$script:rowsW = New-RowSet 6
+$script:rowsW = New-RowSet 4
 
 $sep = New-Object System.Windows.Controls.Border
 $sep.Height = 1; $sep.Background = Brush '#33333D'; $sep.Margin = '0,8,0,0'
 $leftStack.Children.Add($sep) | Out-Null
 
 New-SectionHeader '▼ 读取排行' $accent2
-$script:rowsR = New-RowSet 6
+$script:rowsR = New-RowSet 4
+
+$sep2 = New-Object System.Windows.Controls.Border
+$sep2.Height = 1; $sep2.Background = Brush '#33333D'; $sep2.Margin = '0,8,0,0'
+$leftStack.Children.Add($sep2) | Out-Null
+
+New-SectionHeader '● 内存排行' $accent2
+$script:rowsM = New-RowSet 4
 $right = New-Object System.Windows.Controls.Grid
 [System.Windows.Controls.Grid]::SetColumn($right, 1) | Out-Null
 $body.Children.Add($right) | Out-Null
@@ -534,9 +542,16 @@ function Update-View {
         }
 
         $st = (Get-Content -LiteralPath $script:StateFile -Raw -Encoding UTF8) | ConvertFrom-Json
+        $script:lastSysMem = $st.sysmem
         $ageSec = ((Get-Date) - [datetime]::Parse($st.ts)).TotalSeconds
         if ($ageSec -lt 15) {
-            $script:lblStatus.Text = ("引擎运行中 · {0} 个进程 · 会话 {1}" -f $st.processCount, (Format-Span ([double]$st.uptimeSec)))
+            $memTxt = ''
+            if ($st.sysmem) {
+                $memTxt = ' · 内存 {0}% ({1}/{2}) · 页文件占 {3}' -f $st.sysmem.loadPct,
+                    (Format-Size ([double]$st.sysmem.usedPhys)), (Format-Size ([double]$st.sysmem.totalPhys)),
+                    (Format-Size ([double]$st.sysmem.commitUsed))
+            }
+            $script:lblStatus.Text = ("引擎运行中 · {0} 个进程 · 会话 {1}{2}" -f $st.processCount, (Format-Span ([double]$st.uptimeSec)), $memTxt)
             $script:lblStatus.Foreground = $accent
         } else {
             $script:lblStatus.Text = ("引擎可能已停止（数据 {0:N0} 秒未更新）" -f $ageSec)
@@ -594,6 +609,25 @@ function Update-View {
                 $r.Name.Text = ''; $r.Nums.Text = ''; $r.Fill.Width = 0; $r.Icon.Source = $null
             }
         }
+        $mItems = @()
+        if ($st.memory) { $mItems = @($st.memory | Select-Object -First $script:rowsM.Count) }
+        $maxM = 1.0
+        foreach ($it in $mItems) { if ([double]$it.ws -gt $maxM) { $maxM = [double]$it.ws } }
+        for ($i = 0; $i -lt $script:rowsM.Count; $i++) {
+            $row = $script:rowsM[$i]
+            if ($i -lt $mItems.Count) {
+                $it = $mItems[$i]
+                $row.Name.Text = $it.name
+                try { $row.Icon.Source = Get-ProgramIcon ([string]$it.path) } catch { }
+                $ratio = [double]$it.ws / $maxM
+                if ($ratio -lt 0.02 -and [double]$it.ws -gt 0) { $ratio = 0.02 }
+                $row.Fill.Width = [math]::Max(0, $trackW * $ratio)
+                $row.Nums.Text = ('{0} · 页 {1}' -f (Format-Size ([double]$it.ws)), (Format-Size ([double]$it.pf)))
+            } else {
+                $row.Name.Text = ''; $row.Nums.Text = ''; $row.Fill.Width = 0; $row.Icon.Source = $null
+            }
+        }
+
         for ($i = 0; $i -lt $script:cumLabels.Count; $i++) {
             if ($i -lt $items.Count) {
                 $it = $items[$i]
@@ -916,6 +950,10 @@ $timer.Add_Tick({
 })
 
 $win.Add_Loaded({
+    if ($Window -and $script:winSpans.Contains($Window)) {
+        $script:winKey = $Window
+        Update-WinButtons
+    }
     Update-View
     $timer.Start()
     if (-not $NoTray) { Init-Tray }
@@ -967,6 +1005,8 @@ $win.Add_Loaded({
             $script:winKey = 'm10'
             Update-WinButtons
             Update-View
+Write-Host ("  内存榜: " + (($script:rowsM | ForEach-Object { if ($_.Name.Text) { $_.Name.Text + '=' + $_.Nums.Text } }) -join ' | '))
+if ($script:lastSysMem) { Write-Host ("  系统内存: 负载 {0}%  物理 {1}/{2}  提交 {3}/{4}" -f $script:lastSysMem.loadPct, (Format-Size ([double]$script:lastSysMem.usedPhys)), (Format-Size ([double]$script:lastSysMem.totalPhys)), (Format-Size ([double]$script:lastSysMem.commitUsed)), (Format-Size ([double]$script:lastSysMem.commitLimit))) }
             Write-Host ("  写入榜: " + (($script:rowsW | ForEach-Object { if ($_.Name.Text) { $_.Name.Text + '=' + $_.Nums.Text } }) -join ' | '))
             Write-Host ("  读取榜: " + (($script:rowsR | ForEach-Object { if ($_.Name.Text) { $_.Name.Text + '=' + $_.Nums.Text } }) -join ' | '))
             Write-Host "SELFTEST OK: 窗口/时间窗口/滑块/消息区/托盘 均正常"
