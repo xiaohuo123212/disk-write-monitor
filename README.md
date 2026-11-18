@@ -1,4 +1,4 @@
-﻿# 磁盘读写监视器 · DiskWriteMonitor
+﻿﻿# 磁盘读写监视器 · DiskWriteMonitor
 
 一个 100 KB 出头的 Windows 小工具：**按软件统计磁盘读写量，能回看任何时间点，数据量每天只有几十 KB。**
 
@@ -86,6 +86,39 @@ DiskWriteMonitor.exe --version     版本信息
 ```
 
 加 `--no-ui` 把结果写进 `data\cli.out.log`，便于脚本调用。
+
+## 数据放在哪（升级不会丢）
+
+数据**不放在 exe 旁边**，而是固定在：
+
+```
+%LOCALAPPDATA%\DiskWriteMonitor\
+  app\          解压出来的脚本（每次启动按字节比对，变了才重写）
+  config.json   你的设置
+  data\         历史数据
+  archive\      归档
+```
+
+这样**换目录、重新下载 exe、把 exe 挪到 Downloads 都不会另起一套历史**。
+
+| 场景 | 行为 |
+|---|---|
+| 旧版在 exe 旁边有 `data\` | 首次启动自动整目录复制到新位置，旧的不动 |
+| 想自定义位置 | 设环境变量 `DWM_DATA_HOME=D:\mydata` |
+| `%LOCALAPPDATA%` 不可写 | 自动退回 exe 目录，并在 `launcher.log` 里记一行 |
+
+### 累计值不会因为文件问题归零
+
+`lifetime.json` 是「安装至今」的唯一来源，所以做了两层保护：
+
+1. **原子写 + 备份**：先写 `.tmp` 再替换，替换前把上一版留成 `lifetime.json.bak`
+2. **能自愈**：主文件丢失/损坏 → 用 `.bak`；两个都没有 → **从 `data\buckets\` 里的历史桶重算**，并写日志
+
+```
+[15:08:11] [INFO] lifetime.json 丢失, 已从 7 个历史桶重建累计
+}
+```
+
 
 ## 数据是怎么存的
 
