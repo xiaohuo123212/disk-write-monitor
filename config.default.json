@@ -1,0 +1,27 @@
+﻿{
+    "dataDir":  "data",
+    "historyPoints":  180,
+    "windowPublishSec":  5,
+    "rawCsv":  false,
+    "persist":  {
+                    "flushSec":  300,
+                    "granularitySec":  3600
+                },
+    "archive":  {
+                    "enabled":  true,
+                    "checkEverySec":  900,
+                    "keepMonths":  6,
+                    "archiveRoot":  "archive",
+                    "watchFolders":  [
+
+                                     ],
+                    "olderThanDays":  30,
+                    "compress":  true,
+                    "dryRun":  false,
+                    "moveInsteadOfZip":  false
+                },
+    "autostart":  {
+                      "taskName":  "DiskWriteMonitor"
+                  },
+    "sampleIntervalMs":  1000
+}
