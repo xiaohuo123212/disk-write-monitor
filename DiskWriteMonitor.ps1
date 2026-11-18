@@ -714,7 +714,7 @@ try {
         $cutRing = $now.AddSeconds(-$ringLimit)
         while ($ring.Count -gt 0 -and $ring.Peek().t -lt $cutRing) { [void]$ring.Dequeue() }
 
-        $history.Add([pscustomobject]@{ t = [math]::Round(($now - $runStart).TotalSeconds, 1); ts = $now.ToString('HH:mm:ss'); rate = [math]::Round($rate, 0) })
+            $history.Add([pscustomobject]@{ t = [math]::Round(($now - $runStart).TotalSeconds, 1); ts = $now.ToString('HH:mm:ss'); rate = [math]::Round($rate, 0); rrate = [math]::Round($rrate, 0) })
         while ($history.Count -gt $historyPoints) { $history.RemoveAt(0) }
 
         # 有看板打开时按采样间隔发布(界面就能跟着采样刷新); 没看板时降到 30 秒一次, 减少自身写盘
@@ -740,35 +740,37 @@ try {
             $w1mo = Get-DiskSums (86400 * 30)
 
             # 先把所有桶(含当前未封桶)按小时和按天聚合一次
-            $hourAgg = @{}; $dayAgg = @{}
+            $hourAgg = @{}; $dayAgg = @{}; $hourAggR = @{}; $dayAggR = @{}
             $addAgg = {
-                param($startTime, $sum)
+                param($startTime, $sumW, $sumR)
                 $hk = $startTime.ToString('yyyy-MM-ddTHH')
                 $dk = $startTime.ToString('yyyy-MM-dd')
-                $hourAgg[$hk] = [double]$hourAgg[$hk] + $sum
-                $dayAgg[$dk]  = [double]$dayAgg[$dk] + $sum
+                $hourAgg[$hk]  = [double]$hourAgg[$hk] + $sumW
+                $dayAgg[$dk]   = [double]$dayAgg[$dk] + $sumW
+                $hourAggR[$hk] = [double]$hourAggR[$hk] + $sumR
+                $dayAggR[$dk]  = [double]$dayAggR[$dk] + $sumR
             }
             foreach ($k in $bucketIndex.Keys) {
                 $b = $bucketIndex[$k]
-                $s = 0.0
-                foreach ($pn in $b.programs.Keys) { $s += $b.programs[$pn] }
-                if ($b.reads) { foreach ($pn in $b.reads.Keys) { $s += $b.reads[$pn] } }
-                & $addAgg $b.start $s
+                $sW = 0.0; $sR = 0.0
+                foreach ($pn in $b.programs.Keys) { $sW += $b.programs[$pn] }
+                if ($b.reads) { foreach ($pn in $b.reads.Keys) { $sR += $b.reads[$pn] } }
+                & $addAgg $b.start $sW $sR
             }
-            $curSum = 0.0
-            foreach ($pn in $curBucket.Keys) { $curSum += $curBucket[$pn] }
-            foreach ($pn in $curBucketRead.Keys) { $curSum += $curBucketRead[$pn] }
-            if ($curSum -gt 0) { & $addAgg $bucketStart $curSum }
+            $curSumW = 0.0; $curSumR = 0.0
+            foreach ($pn in $curBucket.Keys) { $curSumW += $curBucket[$pn] }
+            foreach ($pn in $curBucketRead.Keys) { $curSumR += $curBucketRead[$pn] }
+            if (($curSumW + $curSumR) -gt 0) { & $addAgg $bucketStart $curSumW $curSumR }
 
             $hourly = New-Object System.Collections.Generic.List[object]
             for ($i = 23; $i -ge 0; $i--) {
                 $h = $now.AddHours(-$i)
-                $hourly.Add([pscustomobject]@{ label = $h.ToString('HH:00'); bytes = [long][double]$hourAgg[$h.ToString('yyyy-MM-ddTHH')] })
+                $hourly.Add([pscustomobject]@{ label = $h.ToString('HH:00'); bytes = [long][double]$hourAgg[$h.ToString('yyyy-MM-ddTHH')]; rbytes = [long][double]$hourAggR[$h.ToString('yyyy-MM-ddTHH')] })
             }
             $daily = New-Object System.Collections.Generic.List[object]
             for ($i = 29; $i -ge 0; $i--) {
                 $d = $now.Date.AddDays(-$i)
-                $daily.Add([pscustomobject]@{ label = $d.ToString('MM-dd'); bytes = [long][double]$dayAgg[$d.ToString('yyyy-MM-dd')] })
+                $daily.Add([pscustomobject]@{ label = $d.ToString('MM-dd'); bytes = [long][double]$dayAgg[$d.ToString('yyyy-MM-dd')]; rbytes = [long][double]$dayAggR[$d.ToString('yyyy-MM-dd')] })
             }
             # 安装至今 = 已封桶累计 + 当前未封桶(避免刚封完桶时快照偏小)
             $ltSums = @{}
