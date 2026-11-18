@@ -328,6 +328,35 @@ public struct IoCounters
     public ulong ReadTransferCount,  WriteTransferCount,  OtherTransferCount;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+public struct MemCounters
+{
+    public uint cb;
+    public uint PageFaultCount;
+    public UIntPtr PeakWorkingSetSize;
+    public UIntPtr WorkingSetSize;
+    public UIntPtr QuotaPeakPagedPoolUsage;
+    public UIntPtr QuotaPagedPoolUsage;
+    public UIntPtr QuotaPeakNonPagedPoolUsage;
+    public UIntPtr QuotaNonPagedPoolUsage;
+    public UIntPtr PagefileUsage;
+    public UIntPtr PeakPagefileUsage;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct MemStatusEx
+{
+    public uint dwLength;
+    public uint dwMemoryLoad;
+    public ulong ullTotalPhys;
+    public ulong ullAvailPhys;
+    public ulong ullTotalPageFile;
+    public ulong ullAvailPageFile;
+    public ulong ullTotalVirtual;
+    public ulong ullAvailVirtual;
+    public ulong ullAvailExtendedVirtual;
+}
+
 public static class ProcessIo
 {
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -348,6 +377,48 @@ public static class ProcessIo
         if (h == IntPtr.Zero) return false;
         try { return GetProcessIoCounters(h, out c); }
         finally { CloseHandle(h); }
+    }
+
+    [DllImport("psapi.dll", SetLastError = true)]
+    static extern bool GetProcessMemoryInfo(IntPtr hProcess, out MemCounters counters, uint cb);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GlobalMemoryStatusEx(ref MemStatusEx buffer);
+
+    const uint PROCESS_QUERY_INFORMATION = 0x0400;
+    const uint PROCESS_VM_READ = 0x0010;
+
+    // 工作集 + 页文件占用(swap)
+    public static bool TryGetMem(int targetPid, out ulong workingSet, out ulong pageFile)
+    {
+        workingSet = 0; pageFile = 0;
+        // 先用受限权限(覆盖绝大多数进程), 失败再要完整权限
+        IntPtr h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, false, targetPid);
+        if (h == IntPtr.Zero) h = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, targetPid);
+        if (h == IntPtr.Zero) return false;
+        try
+        {
+            MemCounters mc = new MemCounters();
+            mc.cb = (uint)Marshal.SizeOf(typeof(MemCounters));
+            if (!GetProcessMemoryInfo(h, out mc, mc.cb)) return false;
+            workingSet = (ulong)mc.WorkingSetSize.ToUInt64();
+            pageFile = (ulong)mc.PagefileUsage.ToUInt64();
+            return true;
+        }
+        finally { CloseHandle(h); }
+    }
+
+    // 系统物理内存 / 提交 / 页文件
+    public static bool TryGetSystem(out ulong totalPhys, out ulong availPhys, out ulong totalPage, out ulong availPage, out uint load)
+    {
+        totalPhys = 0; availPhys = 0; totalPage = 0; availPage = 0; load = 0;
+        MemStatusEx ms = new MemStatusEx();
+        ms.dwLength = (uint)Marshal.SizeOf(typeof(MemStatusEx));
+        if (!GlobalMemoryStatusEx(ref ms)) return false;
+        totalPhys = ms.ullTotalPhys; availPhys = ms.ullAvailPhys;
+        totalPage = ms.ullTotalPageFile; availPage = ms.ullAvailPageFile;
+        load = ms.dwMemoryLoad;
+        return true;
     }
 }
 '@
@@ -566,11 +637,23 @@ try {
                 try { $pp = $p.Path } catch { $pp = '' }
                 if ($pp) { $procPaths[$procName] = $pp }
             }
-            $rows.Add([pscustomobject]@{ Key = $key; Process = $procName; Pid = $procId; Delta = $deltaW; RDelta = $deltaR })
+            $ws = 0L; $pf = 0L
+            [void][ProcessIo]::TryGetMem($procId, [ref]$ws, [ref]$pf)
+            $rows.Add([pscustomobject]@{ Key = $key; Process = $procName; Pid = $procId; Delta = $deltaW; RDelta = $deltaR; WS = $ws; PF = $pf })
         }
         $alive = @{}
         foreach ($r in $rows) { $alive[$r.Key] = $true }
         foreach ($k in @($seen.Keys)) { if (-not $alive.ContainsKey($k)) { $seen.Remove($k) } }
+
+        # 内存按程序聚合(同一软件多个进程相加)
+        $memNow = @{}
+        foreach ($r in $rows) {
+            if ($r.WS -le 0 -and $r.PF -le 0) { continue }
+            $nm = $r.Process
+            if (-not $memNow.ContainsKey($nm)) { $memNow[$nm] = @{ ws = [long]0; pf = [long]0 } }
+            $memNow[$nm].ws += $r.WS
+            $memNow[$nm].pf += $r.PF
+        }
 
         $rate = 0.0
         $rrate = 0.0
@@ -670,6 +753,30 @@ try {
                 $ltSums[$pn].r += $curBucketRead[$pn]
             }
 
+            $memList = New-Object System.Collections.Generic.List[object]
+            foreach ($k in $memNow.Keys) {
+                $mpath = ''
+                if ($procPaths.ContainsKey($k)) { $mpath = $procPaths[$k] }
+                $memList.Add([pscustomobject]@{ name = $k; ws = [long]$memNow[$k].ws; pf = [long]$memNow[$k].pf; path = $mpath })
+            }
+            $memTop = @($memList | Sort-Object ws -Descending | Select-Object -First 12)
+
+            $tp = [uint64]0; $ap = [uint64]0; $tpf = [uint64]0; $apf = [uint64]0; $load = 0
+            [void][ProcessIo]::TryGetSystem([ref]$tp, [ref]$ap, [ref]$tpf, [ref]$apf, [ref]$load)
+            $commitUsed = [long]([double]$tpf - [double]$apf)
+            $usedPhys = [long]([double]$tp - [double]$ap)
+            $pageCap = [long]([double]$tpf - [double]$tp)
+            if ($pageCap -lt 0) { $pageCap = 0 }
+            $sysMem = [pscustomobject]@{
+                loadPct      = [int]$load
+                totalPhys    = [long]$tp
+                availPhys    = [long]$ap
+                usedPhys     = [long]$usedPhys
+                pageCapacity = [long]$pageCap
+                commitUsed   = [long]$commitUsed
+                commitLimit  = [long]$tpf
+            }
+
             $state = [pscustomobject]@{
                 ts           = $now.ToString('o')
                 uptimeSec    = [math]::Round(($now - $runStart).TotalSeconds, 1)
@@ -691,6 +798,8 @@ try {
                     all = ConvertTo-TopList $ltSums 15
                 }
                 paths = $procPaths
+                memory = $memTop
+                sysmem = $sysMem
                 current = [pscustomobject]@{
                     startedAt = $runStart.ToString('o')
                     totals    = ConvertTo-TopList $totals 10
