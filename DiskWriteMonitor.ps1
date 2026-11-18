@@ -277,13 +277,30 @@ foreach ($f in @(Get-ChildItem -LiteralPath $bucketDir -Filter '*.json' -File -E
 
 $lifetime = @{}
 $lifetimeRead = @{}
-if (Test-Path -LiteralPath $lifetimeFile) {
-    $lt = Read-JsonFile $lifetimeFile
-    if ($lt) {
-        if ($lt.programs) { foreach ($pn in $lt.programs.PSObject.Properties.Name) { $lifetime[$pn] = [double]$lt.programs.$pn } }
-        if ($lt.reads) { foreach ($pn in $lt.reads.PSObject.Properties.Name) { $lifetimeRead[$pn] = [double]$lt.reads.$pn } }
-    }
+$lifetimeSrc = 'none'
+# 依次尝试: 主文件 -> 备份 -> 从历史桶重建。三处都丢才算真丢
+foreach ($candidate in @($lifetimeFile, ($lifetimeFile + '.bak'))) {
+    if ($lifetimeSrc -ne 'none') { break }
+    if (-not (Test-Path -LiteralPath $candidate)) { continue }
+    $lt = Read-JsonFile $candidate
+    if (-not $lt) { continue }
+    if ($lt.programs) { foreach ($pn in $lt.programs.PSObject.Properties.Name) { $lifetime[$pn] = [double]$lt.programs.$pn } }
+    if ($lt.reads) { foreach ($pn in $lt.reads.PSObject.Properties.Name) { $lifetimeRead[$pn] = [double]$lt.reads.$pn } }
+    if ($lifetime.Count -gt 0 -or $lifetimeRead.Count -gt 0) { $lifetimeSrc = $candidate }
 }
+if ($lifetimeSrc -eq 'none' -and (Test-Path -LiteralPath $bucketDir)) {
+    $oldBuckets = @(Get-ChildItem -LiteralPath $bucketDir -Filter *.json -File -ErrorAction SilentlyContinue)
+    foreach ($f in $oldBuckets) {
+        $b = Read-JsonFile $f.FullName
+        if (-not $b) { continue }
+        if ($b.programs) { foreach ($pn in $b.programs.PSObject.Properties.Name) { $lifetime[$pn] = [double]$lifetime[$pn] + [double]$b.programs.$pn } }
+        if ($b.reads) { foreach ($pn in $b.reads.PSObject.Properties.Name) { $lifetimeRead[$pn] = [double]$lifetimeRead[$pn] + [double]$b.reads.$pn } }
+    }
+    if ($oldBuckets.Count -gt 0) { $lifetimeSrc = 'rebuilt' }
+}
+if ($lifetimeSrc -eq 'rebuilt') { Write-Log ("lifetime.json 丢失, 已从 {0} 个历史桶重建累计" -f $oldBuckets.Count) }
+elseif ($lifetimeSrc -eq 'none') { Write-Log 'lifetime.json 不存在, 视作首次安装' }
+elseif ($lifetimeSrc -like '*.bak') { Write-Log 'lifetime.json 损坏, 已用备份恢复' }
 
 # 上次异常退出的检查点 -> 补成正式会话, 并恢复未封桶的那部分
 $curBucket = @{}
@@ -484,8 +501,15 @@ function Save-Lifetime {
     $o = @{}; $ro = @{}
     foreach ($k in $lifetime.Keys) { $o[$k] = [long]$lifetime[$k] }
     foreach ($k in $lifetimeRead.Keys) { $ro[$k] = [long]$lifetimeRead[$k] }
-    [pscustomobject]@{ updatedAt = (Get-Date).ToString('o'); programs = $o; reads = $ro } |
-        ConvertTo-Json -Depth 4 -Compress | Set-Content -LiteralPath $lifetimeFile -Encoding UTF8
+    $json = [pscustomobject]@{ updatedAt = (Get-Date).ToString('o'); programs = $o; reads = $ro } |
+        ConvertTo-Json -Depth 4 -Compress
+    # 原子写: 先写 .tmp 再替换, 并把好的上一版留成 .bak
+    $tmp = $lifetimeFile + '.tmp'
+    [System.IO.File]::WriteAllText($tmp, $json, (New-Object System.Text.UTF8Encoding($false)))
+    if (Test-Path -LiteralPath $lifetimeFile) {
+        Copy-Item -LiteralPath $lifetimeFile -Destination ($lifetimeFile + '.bak') -Force -ErrorAction SilentlyContinue
+    }
+    Move-Item -LiteralPath $tmp -Destination $lifetimeFile -Force
 }
 
 function Flush-Bucket([datetime]$start, [hashtable]$data, [hashtable]$rdata) {
