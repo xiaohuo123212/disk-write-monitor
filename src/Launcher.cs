@@ -132,18 +132,53 @@ internal static class Program
     // ---------- 路径 ----------
     private static string ResolveRoot()
     {
-        string dir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+        // 数据目录固定到 %LOCALAPPDATA%\DiskWriteMonitor，与 exe 放哪儿无关。
+        // 这样换目录、重新下载 exe、放到 Downloads 都不会另起一套历史。
+        string envHome = Environment.GetEnvironmentVariable("DWM_DATA_HOME");
+        string fixedRoot = !string.IsNullOrEmpty(envHome)
+            ? envHome
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DiskWriteMonitor");
+        string exeDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+        string fixedData = Path.Combine(fixedRoot, "data");
+        string legacyData = Path.Combine(exeDir, "data");
+
+        // 首次升级：把 exe 旁边的旧数据搬过来，历史不丢
+        if (Directory.Exists(legacyData) && !Directory.Exists(fixedData))
+        {
+            try
+            {
+                Directory.CreateDirectory(fixedRoot);
+                CopyDir(legacyData, fixedData);
+                string legacyCfg = Path.Combine(exeDir, "config.json");
+                string fixedCfg = Path.Combine(fixedRoot, "config.json");
+                if (File.Exists(legacyCfg) && !File.Exists(fixedCfg)) File.Copy(legacyCfg, fixedCfg);
+                Log("已从 exe 目录迁移旧数据: " + legacyData + " -> " + fixedData);
+            }
+            catch (Exception ex) { Log("迁移旧数据失败, 继续用原目录: " + ex.Message); }
+        }
+
         try
         {
-            string probe = Path.Combine(dir, ".dwm-write-test");
-            File.WriteAllText(probe, "x");
-            File.Delete(probe);
-            return dir;
+            Directory.CreateDirectory(fixedRoot);
+            return fixedRoot;
         }
         catch
         {
-            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                                "DiskWriteMonitor");
+            // 极端情况下退回到 exe 目录
+            return exeDir;
+        }
+    }
+
+    private static void CopyDir(string from, string to)
+    {
+        Directory.CreateDirectory(to);
+        foreach (string f in Directory.GetFiles(from))
+        {
+            File.Copy(f, Path.Combine(to, Path.GetFileName(f)), true);
+        }
+        foreach (string d in Directory.GetDirectories(from))
+        {
+            CopyDir(d, Path.Combine(to, Path.GetFileName(d)));
         }
     }
 
