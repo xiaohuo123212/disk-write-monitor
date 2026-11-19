@@ -555,6 +555,70 @@ public static class PrivateMem
         return result;
     }
 }
+
+// 分页(swap)活动: 页文件 I/O 不归属任何进程, 只能从系统计数器读
+public static class SwapCounters
+{
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PDH_FMT_COUNTERVALUE { public uint CStatus; public double doubleValue; }
+
+    [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+    static extern uint PdhOpenQuery(string szDataSource, IntPtr dwUserData, out IntPtr phQuery);
+
+    [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+    static extern uint PdhAddCounter(IntPtr hQuery, string szFullCounterPath, IntPtr dwUserData, out IntPtr phCounter);
+
+    [DllImport("pdh.dll")]
+    static extern uint PdhCollectQueryData(IntPtr hQuery);
+
+    [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+    static extern uint PdhGetFormattedCounterValue(IntPtr hCounter, uint dwFormat, out uint lpdwType, out PDH_FMT_COUNTERVALUE lpdwValue);
+
+    const uint PDH_FMT_DOUBLE = 0x00000200;
+
+    static IntPtr query = IntPtr.Zero;
+    static IntPtr cIn, cOut, cPf, cDiskW, cDiskR;
+    static bool failed = false;
+
+    static void EnsureOpen()
+    {
+        if (query != IntPtr.Zero || failed) return;
+        if (PdhOpenQuery(null, IntPtr.Zero, out query) != 0) { failed = true; query = IntPtr.Zero; return; }
+        bool ok = true;
+        ok &= PdhAddCounter(query, "\\Memory\\Pages Input/sec", IntPtr.Zero, out cIn) == 0;
+        ok &= PdhAddCounter(query, "\\Memory\\Pages Output/sec", IntPtr.Zero, out cOut) == 0;
+        ok &= PdhAddCounter(query, "\\Paging File(_Total)\\% Usage", IntPtr.Zero, out cPf) == 0;
+        ok &= PdhAddCounter(query, "\\PhysicalDisk(_Total)\\Disk Write Bytes/sec", IntPtr.Zero, out cDiskW) == 0;
+        ok &= PdhAddCounter(query, "\\PhysicalDisk(_Total)\\Disk Read Bytes/sec", IntPtr.Zero, out cDiskR) == 0;
+        if (!ok) { failed = true; }
+        PdhCollectQueryData(query);
+    }
+
+    static double Val(IntPtr counter)
+    {
+        if (counter == IntPtr.Zero) return 0;
+        uint t; PDH_FMT_COUNTERVALUE v;
+        if (PdhGetFormattedCounterValue(counter, PDH_FMT_DOUBLE, out t, out v) != 0) return 0;
+        if (v.CStatus != 0) return 0;
+        return v.doubleValue;
+    }
+
+    // 返回: 分页读入 MB/s, 分页写出 MB/s, 页文件使用率 %, 整盘写 MB/s, 整盘读 MB/s
+    public static bool Read(out double pageInBps, out double pageOutBps, out double pagefilePct, out double diskWriteBps, out double diskReadBps)
+    {
+        pageInBps = 0; pageOutBps = 0; pagefilePct = 0; diskWriteBps = 0; diskReadBps = 0;
+        EnsureOpen();
+        if (query == IntPtr.Zero || failed) return false;
+        if (PdhCollectQueryData(query) != 0) return false;
+        const double pageSize = 4096.0;
+        pageInBps = Val(cIn) * pageSize;
+        pageOutBps = Val(cOut) * pageSize;
+        pagefilePct = Val(cPf);
+        diskWriteBps = Val(cDiskW);
+        diskReadBps = Val(cDiskR);
+        return true;
+    }
+}
 '@
 if (-not ('ProcessIo' -as [type])) { Add-Type -TypeDefinition $src -Language CSharp }
 
@@ -789,6 +853,10 @@ try {
         # 专用工作集: 任务管理器口径, 一次约 2ms
         try { $script:privateWs = [PrivateMem]::Read() } catch { $script:privateWs = @{} }
 
+        # 分页(swap)活动: 页文件 I/O 不属于任何进程, 必须单独读系统计数器
+        $pgIn = 0.0; $pgOut = 0.0; $pfPct = 0.0; $diskW = 0.0; $diskr = 0.0
+        try { [void][SwapCounters]::Read([ref]$pgIn, [ref]$pgOut, [ref]$pfPct, [ref]$diskW, [ref]$diskr) } catch { }
+
         # 内存按程序聚合(同一软件多个进程相加)
         $memNow = @{}
         foreach ($r in $rows) {
@@ -933,6 +1001,16 @@ try {
                 integrity   = [int]$script:integrity
             }
 
+            $swap = [pscustomobject]@{
+                pageInBps     = [long]$pgIn
+                pageOutBps    = [long]$pgOut
+                pagefilePct   = [math]::Round($pfPct, 1)
+                diskWriteBps  = [long]$diskW
+                diskReadBps   = [long]$diskr
+                logicalWriteBps = [long]$rate
+                logicalReadBps  = [long]$rrate
+            }
+
             $state = [pscustomobject]@{
                 ts           = $now.ToString('o')
                 uptimeSec    = [math]::Round(($now - $runStart).TotalSeconds, 1)
@@ -956,6 +1034,7 @@ try {
                 paths = $procPaths
                 memory = $memTop
                 sysmem = $sysMem
+                swap = $swap
                 current = [pscustomobject]@{
                     startedAt = $runStart.ToString('o')
                     totals    = ConvertTo-TopList $totals 10
