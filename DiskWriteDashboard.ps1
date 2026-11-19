@@ -158,6 +158,15 @@ foreach ($r in 0..5) {
     }
     $grid.RowDefinitions.Add($row) | Out-Null
 }
+# 第 7 行: 分页/swap 活动(页文件 I/O 不归属任何进程)
+$rowSwap = New-Object System.Windows.Controls.RowDefinition; $rowSwap.Height = 'Auto'
+$grid.RowDefinitions.Add($rowSwap) | Out-Null
+$script:lblSwap = New-Object System.Windows.Controls.TextBlock
+$script:lblSwap.Text = ''; $script:lblSwap.FontSize = 11
+$script:lblSwap.Foreground = $muted; $script:lblSwap.Margin = '0,4,0,0'
+$script:lblSwap.TextTrimming = 'CharacterEllipsis'
+[System.Windows.Controls.Grid]::SetRow($script:lblSwap, 6) | Out-Null
+$grid.Children.Add($script:lblSwap) | Out-Null
 $win.Content = $grid
 
 # ---- 头部 ----
@@ -581,6 +590,21 @@ function Update-View {
             }
             $script:lblStatus.Text = ("引擎运行中 · {0} 个进程 · 会话 {1}{2}" -f $st.processCount, (Format-Span ([double]$st.uptimeSec)), $memTxt)
             $script:lblStatus.Foreground = $accent
+
+            # 第二行: 分页/swap 活动 —— 页文件 I/O 不归属任何进程, 只能单独报
+            $swapTxt = ""
+            $swapWarn = $false
+            if ($st.swap) {
+                $inR = [double]$st.swap.pageInBps; $outR = [double]$st.swap.pageOutBps
+                $dw = [double]$st.swap.diskWriteBps; $dr = [double]$st.swap.diskReadBps
+                $lw = [double]$st.swap.logicalWriteBps
+                $swapTxt = "分页 入 {0}/s 出 {1}/s · 页文件 {2}% · 整盘写 {3}/s 读 {4}/s · 进程写入 {5}/s（含缓存）" -f (Format-Rate $inR), (Format-Rate $outR), $st.swap.pagefilePct, (Format-Rate $dw), (Format-Rate $dr), (Format-Rate $lw)
+                if ($outR -gt 2MB -or $inR -gt 5MB -or $dw -gt 20MB -or [double]$st.swap.pagefilePct -gt 50) { $swapWarn = $true }
+            }
+            if ($script:lblSwap) {
+                $script:lblSwap.Text = $swapTxt
+                if ($swapWarn) { $script:lblSwap.Foreground = $warn } else { $script:lblSwap.Foreground = $muted }
+            }
         } else {
             $script:lblStatus.Text = ("引擎可能已停止（数据 {0:N0} 秒未更新）" -f $ageSec)
             $script:lblStatus.Foreground = $warn
