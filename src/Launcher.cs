@@ -43,6 +43,7 @@ internal static class Program
                 case "gui":
                 case "--gui":
                 case "":
+                    ClearUserClosed(root);   // 手动打开就清掉"用户已退出"标记
                     return RunPowerShell("-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + dashboard +
                         "\" -Root \"" + root + "\" -ConfigPath \"" + config + "\"", root, false);
 
@@ -52,6 +53,14 @@ internal static class Program
                         "\" -Root \"" + root + "\" -ConfigPath \"" + config + "\"", root, false);
 
                 case "--autostart":
+                    // 用户本次开机已经主动退出过面板, 就别再弹出来了(计划任务每 10 分钟会调一次)
+                    if (UserClosedSinceBoot(root))
+                    {
+                        Log("用户本次开机已主动退出面板, 跳过自启");
+                        StartEngineDetached(root, engine, config);
+                        return 0;
+                    }
+
                     // 开机自启: 先等一会儿, 避开登录瞬间的启动风暴, 再拉引擎和面板
                     int delaySec = ReadAutostartDelay(config);
                     if (delaySec > 0)
@@ -60,9 +69,9 @@ internal static class Program
                         System.Threading.Thread.Sleep(delaySec * 1000);
                     }
                     StartEngineDetached(root, engine, config);
+                    // -NoWake: 若已有实例在跑, 不要唤醒它的窗口(计划任务每 10 分钟会调一次)
                     return RunPowerShell("-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + dashboard +
-                        "\" -Root \"" + root + "\" -ConfigPath \"" + config + "\"", root, false);
-
+                        "\" -Root \"" + root + "\" -ConfigPath \"" + config + "\" -NoWake", root, false);
                 case "--tray":
                     return RunPowerShell("-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + dashboard +
                         "\" -Root \"" + root + "\" -ConfigPath \"" + config + "\" -StartHidden", root, false);
@@ -137,6 +146,34 @@ internal static class Program
 
     // ---------- 路径 ----------
     // 从 config.json 里读 autostart.delaySec (没有就用默认 20 秒)
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern ulong GetTickCount64();
+
+    // 面板被用户主动退出过(且发生在本次开机之后)就返回 true
+    private static bool UserClosedSinceBoot(string root)
+    {
+        try
+        {
+            string marker = Path.Combine(root, "data", "ui.closed");
+            if (!File.Exists(marker)) return false;
+            DateTime closedAt = File.GetLastWriteTime(marker);
+            DateTime bootAt = DateTime.Now.AddMilliseconds(-(double)GetTickCount64());
+            return closedAt > bootAt;
+        }
+        catch { return false; }
+    }
+
+    // 用户手动启动(双击 exe)时清掉"已退出"标记
+    private static void ClearUserClosed(string root)
+    {
+        try
+        {
+            string marker = Path.Combine(root, "data", "ui.closed");
+            if (File.Exists(marker)) File.Delete(marker);
+        }
+        catch { }
+    }
+
     private static int ReadAutostartDelay(string configPath)
     {
         try
