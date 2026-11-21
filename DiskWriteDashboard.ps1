@@ -11,7 +11,8 @@ param(
     [string]$Snapshot = '',
     [string]$Window = '',
     [switch]$NoTray,
-    [switch]$StartHidden
+    [switch]$StartHidden,
+    [switch]$NoWake
 )
 
 $ErrorActionPreference = 'Stop'
@@ -915,6 +916,10 @@ function Show-Panel {
 
 function Exit-App {
     $script:reallyExit = $true
+    # 记一笔"用户主动退出", 计划任务每 10 分钟重复触发时就不会再弹窗
+    try {
+        Set-Content -LiteralPath (Join-Path $script:DataDir 'ui.closed') -Value (Get-Date).ToString('o') -Encoding ASCII
+    } catch { }
     try {
         if ($script:trayIcon) { $script:trayIcon.Visible = $false; $script:trayIcon.Dispose() }
     } catch { }
@@ -1094,11 +1099,16 @@ $win.Add_Closed({
 if (-not $SelfTest -and -not $Snapshot) {
     $script:uiMutex = New-Object System.Threading.Mutex($false, 'Local\DiskWriteMonitorUI')
     if (-not $script:uiMutex.WaitOne(0)) {
-        # 已有实例: 留一个请求文件, 让它把窗口显示出来
-        try {
-            Set-Content -LiteralPath (Join-Path $script:DataDir 'show.request') -Value (Get-Date).ToString('o') -Encoding ASCII
-        } catch { }
-        Write-Host '面板已在运行，已请求显示已有窗口'
+        # 已有实例在跑
+        if ($NoWake) {
+            Write-Host '面板已在运行（自启调用，不唤醒窗口）'
+        } else {
+            # 手动打开: 请求已有实例把窗口显示出来
+            try {
+                Set-Content -LiteralPath (Join-Path $script:DataDir 'show.request') -Value (Get-Date).ToString('o') -Encoding ASCII
+            } catch { }
+            Write-Host '面板已在运行，已请求显示已有窗口'
+        }
         return
     }
 }
