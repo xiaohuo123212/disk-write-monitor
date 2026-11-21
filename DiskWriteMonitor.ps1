@@ -332,6 +332,13 @@ if (Test-Path -LiteralPath $currentFile) {
     Remove-Item -LiteralPath $currentFile -Force -ErrorAction SilentlyContinue
 }
 
+# 记录本工具距开机多少秒才起来(用于观察开机优化效果)
+$script:bootToStartSec = 0.0
+try {
+    $osInfo = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+    $script:bootToStartSec = [math]::Round(((Get-Date) - $osInfo.LastBootUpTime).TotalSeconds, 1)
+} catch { }
+
 # 自身完整性级别: 低完整性(<0x2000)只能看到很少进程, 用于提示用户
 $script:integrity = 0x2000
 try {
@@ -999,6 +1006,7 @@ try {
                 commitUsed   = [long]$commitUsed
                 commitLimit  = [long]$tpf
                 integrity   = [int]$script:integrity
+                bootToStartSec = $script:bootToStartSec
             }
 
             $swap = [pscustomobject]@{
