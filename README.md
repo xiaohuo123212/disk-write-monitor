@@ -1,4 +1,4 @@
-﻿﻿﻿﻿# 磁盘读写监视器 · DiskWriteMonitor
+﻿﻿﻿﻿﻿# 磁盘读写监视器 · DiskWriteMonitor
 
 一个 100 KB 出头的 Windows 小工具：**按软件统计磁盘读写量，能回看任何时间点，数据量每天只有几十 KB。**
 
@@ -178,6 +178,28 @@ archive\
 **判断方法**：分页「出」持续走高 + 页文件百分比上升 = 正在换出；分页「入」高 = 正在把程序从页文件读回来（切换程序时明显）。
 
 这一行超过阈值（出 > 2 MB/s、入 > 5 MB/s、整盘写 > 20 MB/s、页文件 > 50%）会变成橙色。
+
+
+## 关掉之后不会被弹出来
+
+三个机制保证「你关掉就是关掉」：
+
+| 场景 | 行为 |
+|---|---|
+| 点 X（最小化） | 计划任务再触发也不会把窗口顶出来（自启调用带 `-NoWake`） |
+| 点「退出」 | 写 `data\ui.closed` 标记，**本次开机后续的自启全部跳过** |
+| 下次开机 | 标记失效（判定依据是"退出时间晚于本次开机时间"），正常自启 |
+| 手动双击 exe | 清掉标记并打开窗口；已有实例时请求它显示，不会开第二个 |
+
+> 为什么需要这个：计划任务带一个 10 分钟重复触发（当年为了在进程被杀后拉起引擎加的），它会反复执行 `--autostart`，以前每次都会把窗口顶出来。
+
+想彻底去掉那个重复触发（需要管理员）：
+
+```powershell
+$t = Get-ScheduledTask -TaskName "DSH-DiskWriteMonitor"
+$t.Triggers = @($t.Triggers | Where-Object { $_.CimClass.CimClassName -eq "MSFT_TaskLogonTrigger" })
+Set-ScheduledTask -TaskName "DSH-DiskWriteMonitor" -InputObject $t
+```
 
 
 ## 内存与页文件（swap）
