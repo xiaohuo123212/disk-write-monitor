@@ -21,7 +21,10 @@
                     "moveInsteadOfZip":  false
                 },
     "autostart":  {
-                      "taskName":  "DiskWriteMonitor"
+                      "taskName":  "DSH-DiskWriteMonitor",
+                      "delaySec": 20
                   },
     "sampleIntervalMs":  1000
 }
+
+
