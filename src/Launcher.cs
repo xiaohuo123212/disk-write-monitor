@@ -52,7 +52,13 @@ internal static class Program
                         "\" -Root \"" + root + "\" -ConfigPath \"" + config + "\"", root, false);
 
                 case "--autostart":
-                    // 开机自启: 先把引擎拉起来(不等它), 再正常打开面板(可见)
+                    // 开机自启: 先等一会儿, 避开登录瞬间的启动风暴, 再拉引擎和面板
+                    int delaySec = ReadAutostartDelay(config);
+                    if (delaySec > 0)
+                    {
+                        Log("autostart 延迟 " + delaySec + " 秒");
+                        System.Threading.Thread.Sleep(delaySec * 1000);
+                    }
                     StartEngineDetached(root, engine, config);
                     return RunPowerShell("-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + dashboard +
                         "\" -Root \"" + root + "\" -ConfigPath \"" + config + "\"", root, false);
@@ -130,6 +136,29 @@ internal static class Program
     }
 
     // ---------- 路径 ----------
+    // 从 config.json 里读 autostart.delaySec (没有就用默认 20 秒)
+    private static int ReadAutostartDelay(string configPath)
+    {
+        try
+        {
+            if (!File.Exists(configPath)) return 20;
+            string text = File.ReadAllText(configPath);
+            var m = System.Text.RegularExpressions.Regex.Match(text, @"""delaySec""\s*:\s*(\d+)");
+            if (m.Success)
+            {
+                int v;
+                if (int.TryParse(m.Groups[1].Value, out v))
+                {
+                    if (v < 0) v = 0;
+                    if (v > 300) v = 300;
+                    return v;
+                }
+            }
+        }
+        catch { }
+        return 20;
+    }
+
     private static string ResolveRoot()
     {
         // 数据目录固定到 %LOCALAPPDATA%\DiskWriteMonitor，与 exe 放哪儿无关。
